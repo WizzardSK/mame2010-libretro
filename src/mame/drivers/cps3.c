@@ -1955,7 +1955,19 @@ static void cps3_emit_tilemap(running_machine *machine, int tilemapnum)
 static VIDEO_UPDATE(cps3)
 {
 	int y,x, count;
-	attoseconds_t period = screen->frame_period().attoseconds;
+	attoseconds_t period;
+
+	/* Bail if the render state is not valid.  These statics are set up in
+	   VIDEO_START and nulled in cps3_exit; if a frame is somehow serviced
+	   before the former or after the latter (e.g. a stray retro_run during
+	   the libretro close sequence), the buffers point at freed or unmapped
+	   storage and the renderbuffer clear below would fault.  Nothing to draw
+	   in that window, so return cleanly. */
+	if (renderbuffer_bitmap == NULL || cps3_mame_colours == NULL ||
+		cps3_char_ram == NULL || cps3_ss_ram == NULL)
+		return 0;
+
+	period = screen->frame_period().attoseconds;
 	rectangle visarea = screen->visible_area();
 
 	int bg_drawn[4] = { 0, 0, 0, 0 };
@@ -3296,6 +3308,34 @@ static const struct WD33C93interface scsi_intf =
 static void cps3_exit(running_machine &machine)
 {
 	wd33c93_exit(&scsi_intf);
+
+	/* All of the pointers below refer to memory owned by the machine's
+	   auto_alloc arena (or, for renderbuffer_bitmap, an auto_bitmap_alloc
+	   from that same arena).  That memory is freed when the machine is
+	   destroyed, but these are file-scope statics: in a libretro build the
+	   core DLL stays resident across a content close -> open cycle, so
+	   after teardown they would keep pointing at freed storage.  A frame
+	   update that runs during the close sequence (RetroArch issues a few
+	   more retro_run() calls while tearing the machine down) or before the
+	   next run's VIDEO_START has reassigned them would then dereference a
+	   dangling bitmap_t / buffer and fault.  This was observed as an
+	   intermittent segfault -- always at the VIDEO_UPDATE top-of-frame
+	   renderbuffer clear -- both when closing sfiii2n and when starting it
+	   again.  Null them here so a stale access reads NULL (guarded in
+	   VIDEO_UPDATE) instead of freed memory. */
+	renderbuffer_bitmap        = NULL;
+	cps3_mame_colours          = NULL;
+	cps3_char_ram              = NULL;
+	cps3_ss_ram                = NULL;
+	cps3_user4region           = NULL;
+	cps3_user5region           = NULL;
+	cps3_user5region_length    = 0;
+	decrypted_gamerom          = NULL;
+	cps3_0xc0000000_ram        = NULL;
+	cps3_0xc0000000_ram_decrypted = NULL;
+	cps3_eeprom                = NULL;
+	cps3_nops                  = NULL;
+	cps3_draw_list_count       = 0;
 }
 
 static MACHINE_START( cps3 )
