@@ -1512,26 +1512,6 @@ static void retro_poll_mame_input(void)
 void retro_run (void)
 {
    bool updated = false;
-
-   /* Do not run a frame unless a session is actually loaded and live.
-      retro_load_ok is set true once retro_load_game has fully brought the
-      machine up, and cleared when the session is torn down. Without this
-      guard, retro_run() would call retro_main_loop() -- and thus the
-      driver's VIDEO_UPDATE and the rest of the emulated frame -- during the
-      window around content close/reload, when RetroArch continues to pump
-      retro_run() while (or just after) the machine and all of its objects
-      (bitmaps, screen device, RAM regions) have been freed. Servicing a
-      frame against that freed state dereferences dangling pointers and
-      crashes (observed as an intermittent SIGSEGV in CPS-3's VIDEO_UPDATE
-      renderbuffer clear on sfiii2n, walking a freed bitmap base pointer).
-      When there is no live session there is nothing to draw; emit a
-      duplicate/blank frame so the frontend still gets a video callback. */
-   if (!retro_load_ok)
-   {
-      video_cb(NULL, rtwi, rthe, topw << PITCH);
-      return;
-   }
-
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &updated) && updated)
        check_variables();
 
@@ -1553,15 +1533,6 @@ void retro_run (void)
 
 void retro_unload_game(void)
 {
-	/* Mark the session as no longer runnable as soon as the frontend asks
-	   to unload the content. RetroArch may still call retro_run() one or
-	   more times between here and retro_deinit(); clearing retro_load_ok
-	   now makes those calls no-op (see retro_run) instead of servicing a
-	   frame against a machine that is being torn down. retro_deinit() also
-	   clears it, which remains correct (clearing an already-false flag is
-	   harmless). */
-	retro_load_ok = false;
-
 	if(pauseg == 0)
 		pauseg = -1;
 
