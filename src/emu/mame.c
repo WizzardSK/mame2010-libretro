@@ -213,18 +213,27 @@ extern core_options *retro_global_options;
 
 void retro_main_loop(void)
 {
+	int new_driver;
+
+	/* After a plain exit (content close) the machine is freed below and
+	   NOT relaunched; the frontend may still call retro_run() -- and thus
+	   this function -- a few more times before retro_deinit().  There is
+	   nothing to run in that window. */
+	if (retro_global_machine == NULL)
+		return;
+
 	retro_global_machine->retro_loop();
 
 	if(ENDEXEC==1)
    {
       // check the state of the machine
-      if (retro_global_machine->new_driver_pending())
+      // Capture this BEFORE freeing the machine below.
+      new_driver = retro_global_machine->new_driver_pending();
+      if (new_driver)
       {
          options_set_string(retro_global_options, OPTION_GAMENAME, retro_global_machine->new_driver_name(), OPTION_PRIORITY_CMDLINE);
          firstrun = true;
       }
-      if (retro_global_machine->exit_pending())
-         ;//exit_pending = true;
 
       // destroy the machine and the config
       // Null the pointers after freeing so a later free_machineconfig()
@@ -246,7 +255,33 @@ void retro_main_loop(void)
       // reset the options
       mame_opts = NULL;
       ENDEXEC=0;
-      retro_execute();
+
+      /* Re-enter mame_execute() ONLY when the machine asked to switch to a
+         different driver.  The old code called retro_execute()
+         unconditionally, which on a plain exit -- i.e. content close, where
+         the OSD sets pauseg = -1 and the machine schedules its own exit --
+         silently RELAUNCHED the game that was just shut down: mame_execute()
+         allocated a fresh machine_config and running_machine for the same
+         GAMENAME and started bringing it up.  The frontend, meanwhile, is
+         tearing the session down; retro_deinit() then ran
+         retro_machineexit() on that half-initialised relaunched machine,
+         which corrupts the global resource pool's bookkeeping.  The pool is
+         walked again by the static destructors when the frontend unloads
+         the core DLL, and walking the corrupted list never terminates --
+         observed as RetroArch hanging forever inside FreeLibrary /
+         DLL_PROCESS_DETACH when selecting Close Content, with the main
+         thread spinning in core code.  (The relaunch was also the reason
+         closing a game used to re-trigger first-frame driver bugs, since
+         the game invisibly booted again during close.)
+
+         On a plain exit there is nothing to relaunch: the machine and
+         config are freed above, the pointers are NULL, and retro_deinit ->
+         retro_finish finds nothing left to tear down and just releases the
+         options.  Driver switching (MAME's 'select new game' path) still
+         works: new_driver_pending() was latched above before the machine
+         was freed, and only that path re-enters mame_execute(). */
+      if (new_driver)
+         retro_execute();
 
    }
 }
