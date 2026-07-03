@@ -425,6 +425,36 @@ void running_machine::retro_loop()
     * audio/video framing contract. */
    while (!retro_frame_drawn())
    {
+      /* Honour a scheduled exit (content close: the OSD sets pauseg = -1
+       * and osd_update() calls schedule_exit(), which sets m_exit_pending
+       * and returns without marking the frame drawn).  In upstream MAME
+       * the run() while-loop consumed m_exit_pending; in this port that
+       * loop is vestigial and this per-frame loop is the scheduler pump,
+       * so the flag must be consumed HERE.  Without this check the loop
+       * can never terminate once an exit is scheduled -- the frame-drawn
+       * flag is never set again and m_exit_pending is never read -- and
+       * retro_run() simply never returns: the frontend freezes forever on
+       * Close Content, with the emulated game still running inside the
+       * stuck call.  Wind the machine down through the same exit phase
+       * schedule_hard_reset() uses, flag ENDEXEC so retro_main_loop()
+       * frees the machine and config, and return. */
+      if (m_exit_pending && m_saveload_schedule == SLS_NONE)
+      {
+         /* and out via the exit phase */
+         m_current_phase = MACHINE_PHASE_EXIT;
+
+         /* save the NVRAM and configuration */
+         sound_mute(this, true);
+         nvram_save(this);
+         config_save_settings(this);
+
+         /* call all exit callbacks registered */
+         call_notifiers(MACHINE_NOTIFY_EXIT);
+
+         ENDEXEC = 1;
+         return;
+      }
+
       /* execute CPUs if not paused */
       if (!m_paused)
          m_scheduler.timeslice();
