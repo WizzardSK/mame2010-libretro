@@ -1980,7 +1980,32 @@ static VIDEO_UPDATE(cps3)
 
 	/* registers are normally 002a006f 01ef01c6
             widescreen mode = 00230076 026501c6
-      only SFIII2 uses widescreen, I don't know exactly which register controls it */
+      only SFIII2 uses widescreen, I don't know exactly which register controls it
+
+   IMPORTANT: screen->configure() can free and reallocate the screen's
+   backing bitmaps (screen_device::realloc_screen_bitmaps() does exactly
+   that whenever the new width or height is larger than the current
+   allocation).  The 'bitmap' argument this function was handed IS that
+   screen bitmap, captured before the call, so once configure() has grown
+   it, 'bitmap' is a dangling pointer to freed memory and every later write
+   through it (the zoom copy and the SS-layer draw below) is a
+   use-after-free.
+
+   sfiii2n is the only CPS-3 game that switches to the wider 496-pixel
+   mode, and it does so on its very first rendered frame: the initial
+   screen bitmap is allocated at the 384-wide startup size, the first
+   VIDEO_UPDATE sees the widescreen register and calls configure(496,...),
+   which frees the 384-wide bitmap and allocates a 496-wide one -- and then
+   the old draw pointer is walked off the end of freed storage.  This was a
+   deterministic segfault on cold load of sfiii2n, faulting in the per-
+   frame render with a bitmap base pointer in freed/unmapped memory.
+
+   Fix: when a mode change actually forces a configure(), do it and then
+   return immediately without drawing.  The reallocation is now complete;
+   the NEXT frame is handed the fresh, correctly-sized screen bitmap and
+   renders normally.  Dropping the single transition frame is invisible (it
+   happens once, as the game starts).  When no configure() is needed the
+   function proceeds and draws as usual. */
 	if (((cps3_fullscreenzoom[1]&0xffff0000)>>16)==0x0265)
 	{
 		if (cps3_screenwidth!=496)
@@ -1989,6 +2014,8 @@ static VIDEO_UPDATE(cps3)
 			visarea.min_x = 0; visarea.max_x = 496-1;
 			visarea.min_y = 0; visarea.max_y = 224-1;
 			screen->configure(496, 224, visarea, period);
+			/* 'bitmap' may now be freed; do not touch it this frame */
+			return 0;
 		}
 	}
 	else
@@ -1999,6 +2026,8 @@ static VIDEO_UPDATE(cps3)
 			visarea.min_x = 0; visarea.max_x = 384-1;
 			visarea.min_y = 0; visarea.max_y = 224-1;
 			screen->configure(384, 224, visarea, period);
+			/* 'bitmap' may now be freed; do not touch it this frame */
+			return 0;
 		}
 	}
 
