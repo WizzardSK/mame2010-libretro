@@ -1,0 +1,12 @@
+name: preflight
+on: [push, workflow_dispatch]
+jobs:
+  android-x86:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ndk-build for x86
+        run: |
+          $ANDROID_NDK_LATEST_HOME/ndk-build --no-print-directory -j$(nproc) -C jni APP_ABI=x86 2>&1 | tail -40
+          ls -la libs/x86/
+          file libs/x86/libretro.so
